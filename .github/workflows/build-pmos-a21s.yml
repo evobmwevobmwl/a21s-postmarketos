@@ -72,17 +72,35 @@ jobs:
         env:
           PMOS_UI: ${{ inputs.interface }}
         run: |
-          pmbootstrap config work "$PMB_WORK"
-          pmbootstrap config aports "$PMAPORTS"
-          pmbootstrap config device samsung-a21s
-          pmbootstrap config ui "$PMOS_UI"
-          pmbootstrap config user pmos
-          pmbootstrap config hostname galaxy-a21s
-          pmbootstrap config timezone GMT
-          pmbootstrap config locale en_US.UTF-8
-          pmbootstrap config jobs "$(nproc)"
-          pmbootstrap config extra_space 512
-          pmbootstrap config build_pkgs_on_install true
+          PMB_CONFIG="$HOME/.config/pmbootstrap_v3.cfg"
+          PMB_WORK_VERSION="$(
+            python3 -c \
+              'import sys; sys.path.insert(0, "pmbootstrap"); import pmb.config; print(pmb.config.work_version)'
+          )"
+
+          mkdir -p "$HOME/.config" "$PMB_WORK/cache_git"
+          printf '%s\n' "$PMB_WORK_VERSION" > "$PMB_WORK/version"
+
+          printf '%s\n' \
+            '[pmbootstrap]' \
+            "aports = $PMAPORTS" \
+            "work = $PMB_WORK" \
+            'build_pkgs_on_install = True' \
+            'device = samsung-a21s' \
+            'extra_space = 512' \
+            'hostname = galaxy-a21s' \
+            "jobs = $(nproc)" \
+            'locale = en_US.UTF-8' \
+            'timezone = GMT' \
+            "ui = $PMOS_UI" \
+            'user = pmos' \
+            '' \
+            '[providers]' \
+            '' \
+            '[mirrors]' \
+            > "$PMB_CONFIG"
+
+          chmod 600 "$PMB_CONFIG"
           pmbootstrap status
 
       - name: Update local package checksums
