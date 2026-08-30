@@ -1,4 +1,4 @@
-name: Build postmarketOS for Galaxy A21s
+name: Build postmarketOS recovery ZIP for Galaxy A21s
 
 on:
   workflow_dispatch:
@@ -18,16 +18,20 @@ permissions:
 
 jobs:
   build:
-    name: Build A21s image
+    name: Build A21s recovery ZIP
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 120
 
     env:
       PMB_WORK: ${{ github.workspace }}/pmbootstrap-work
       PMAPORTS: ${{ github.workspace }}/pmaports
       OUTPUT: ${{ github.workspace }}/output
+      PREBUILT_KERNEL: linux-postmarketos-exynos850-7.2.0-r0.apk
 
     steps:
+      - name: Check out prebuilt kernel and CI files
+        uses: actions/checkout@v4
+
       - name: Install host dependencies
         run: |
           sudo apt-get update
@@ -56,7 +60,7 @@ jobs:
             "$HOME/.local/bin/pmbootstrap"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Add experimental Galaxy A21s port
+      - name: Add Galaxy A21s port and prebuilt kernel
         run: |
           git clone --depth=1 --branch mainline \
             https://github.com/samsungexynos850/pmos-a21s.git \
@@ -65,14 +69,18 @@ jobs:
           mkdir -p "$PMAPORTS/device/testing"
           cp -a a21s-port/device-samsung-a21s \
             "$PMAPORTS/device/testing/"
-          cp -a a21s-port/linux-postmarketos-exynos850 \
-            "$PMAPORTS/device/testing/"
+          cp -a ci/linux-prebuilt \
+            "$PMAPORTS/device/testing/linux-postmarketos-exynos850"
+          cp "$GITHUB_WORKSPACE/$PREBUILT_KERNEL" \
+            "$PMAPORTS/device/testing/linux-postmarketos-exynos850/"
 
-          # The experimental aport references an unpublished touchscreen
-          # firmware package. The current DTS has no touchscreen node yet, so
-          # omit that dependency for the initial boot image.
-          sed -i '/^[[:space:]]*firmware-samsung-a21s-ts-fw[[:space:]]*$/d' \
-            "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
+          sed -i \
+            's/deviceinfo_flash_method="fastboot"/deviceinfo_flash_method="heimdall-bootimg"/' \
+            "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
+
+          test -f "$PMAPORTS/device/testing/linux-postmarketos-exynos850/$PREBUILT_KERNEL"
+          grep -q 'deviceinfo_flash_method="heimdall-bootimg"' \
+            "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
 
       - name: Configure pmbootstrap
         env:
@@ -114,37 +122,7 @@ jobs:
           pmbootstrap checksum linux-postmarketos-exynos850
           pmbootstrap checksum device-samsung-a21s
 
-      - name: Build kernel
-        run: |
-          pmbootstrap build linux-postmarketos-exynos850 \
-            --arch aarch64 \
-            --force
-
-      - name: Collect kernel artifacts
-        run: |
-          mkdir -p "$OUTPUT/kernel"
-
-          find "$PMB_WORK/packages" -type f \
-            -name 'linux-postmarketos-exynos850-*.apk' \
-            -exec cp {} "$OUTPUT/kernel/" \;
-
-          find "$PMB_WORK/chroot_buildroot_aarch64/home/pmos/build" -type f \
-            \( -path '*/arch/arm64/boot/Image' \
-               -o -name 'exynos850-a217f-3gb.dtb' \) \
-            -exec cp {} "$OUTPUT/kernel/" \; || true
-
-          test -n "$(find "$OUTPUT/kernel" -type f -name '*.apk' -print -quit)"
-          find "$OUTPUT/kernel" -type f -exec ls -lh {} \;
-
-      - name: Upload kernel artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: galaxy-a21s-mainline-kernel
-          path: output/kernel/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Build postmarketOS image
+      - name: Build TWRP recovery ZIP
         env:
           PMOS_PASSWORD: ${{ secrets.PMOS_PASSWORD }}
         run: |
@@ -153,34 +131,41 @@ jobs:
           fi
 
           pmbootstrap install \
+            --android-recovery-zip \
+            --recovery-install-partition USERDATA \
             --password "$PMOS_PASSWORD" \
-            --filesystem ext4 \
-            --no-sparse
+            --filesystem ext4
 
-      - name: Export rootfs and Samsung boot files
+      - name: Export recovery ZIP
         run: |
-          mkdir -p "$OUTPUT"
-          pmbootstrap export --odin "$OUTPUT"
+          mkdir -p "$OUTPUT/links" "$OUTPUT/artifacts"
+          pmbootstrap export "$OUTPUT/links"
 
-          cd "$OUTPUT"
+          find "$OUTPUT/links" -maxdepth 1 \
+            \( -type f -o -type l \) \
+            -exec cp -Lv {} "$OUTPUT/artifacts/" \;
+
+          test -n "$(find "$OUTPUT/artifacts" -type f -name '*.zip' -print -quit)"
+
+          cd "$OUTPUT/artifacts"
           find . -type f ! -name SHA256SUMS \
             -exec sha256sum {} \; > SHA256SUMS
-          find . -maxdepth 2 -type f -exec ls -lh {} \;
+          find . -maxdepth 1 -type f -exec ls -lh {} \;
 
-      - name: Upload postmarketOS images
+      - name: Upload recovery ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: postmarketOS-galaxy-a21s-${{ inputs.interface }}
-          path: output/
+          name: postmarketOS-galaxy-a21s-recovery-${{ inputs.interface }}
+          path: output/artifacts/
           if-no-files-found: error
-          compression-level: 6
+          compression-level: 0
           retention-days: 14
 
       - name: Upload build log after failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: postmarketOS-build-log
+          name: postmarketOS-recovery-build-log
           path: pmbootstrap-work/log.txt
           if-no-files-found: ignore
           retention-days: 14

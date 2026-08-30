@@ -1,0 +1,27 @@
+# Repackage the previously compiled kernel with the current CI abuild key.
+# This avoids compiling Linux again while keeping apk signature verification.
+pkgname=linux-postmarketos-exynos850
+pkgver=7.2.0
+pkgrel=1
+pkgdesc="Prebuilt mainline kernel for Exynos850"
+url="https://github.com/samsungexynos850/linux"
+arch="aarch64"
+license="GPL-2.0-only"
+makedepends="gzip tar"
+options="!check !strip"
+source="linux-postmarketos-exynos850-7.2.0-r0.apk"
+builddir="$srcdir"
+
+package() {
+	mkdir -p "$pkgdir"
+	gzip -dc "$srcdir/linux-postmarketos-exynos850-7.2.0-r0.apk" |
+		tar --ignore-zeros \
+			--exclude='.SIGN.*' \
+			--exclude='.PKGINFO' \
+			--exclude='.INSTALL' \
+			-xf - -C "$pkgdir"
+}
+
+sha512sums="
+11e3bdc00c42adbb0d14dacff528e43228db83aad46953b4e5d1c8bb21f15117c71d174d9212fd99742275a93049251d19b7e503bd44bbbd02c37f4764fc8781  linux-postmarketos-exynos850-7.2.0-r0.apk
+"
