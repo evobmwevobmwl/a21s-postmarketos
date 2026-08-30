@@ -1,0 +1,138 @@
+name: Build postmarketOS for Galaxy A21s
+
+on:
+  workflow_dispatch:
+    inputs:
+      interface:
+        description: User interface
+        required: true
+        default: console
+        type: choice
+        options:
+          - console
+          - xfce4
+          - phosh
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build A21s image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    env:
+      PMB_WORK: ${{ github.workspace }}/pmbootstrap-work
+      PMAPORTS: ${{ github.workspace }}/pmaports
+      OUTPUT: ${{ github.workspace }}/output
+
+    steps:
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            binfmt-support \
+            git \
+            openssl \
+            python3 \
+            qemu-user-static \
+            rsync \
+            sudo \
+            xz-utils
+
+      - name: Download pmbootstrap and pmaports
+        run: |
+          git clone --depth=1 \
+            https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git \
+            pmbootstrap
+
+          git clone --depth=1 \
+            https://gitlab.postmarketos.org/postmarketOS/pmaports.git \
+            "$PMAPORTS"
+
+          mkdir -p "$HOME/.local/bin"
+          ln -s "$GITHUB_WORKSPACE/pmbootstrap/pmbootstrap.py" \
+            "$HOME/.local/bin/pmbootstrap"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Add experimental Galaxy A21s port
+        run: |
+          git clone --depth=1 --branch mainline \
+            https://github.com/samsungexynos850/pmos-a21s.git \
+            a21s-port
+
+          mkdir -p "$PMAPORTS/device/testing"
+          cp -a a21s-port/device-samsung-a21s \
+            "$PMAPORTS/device/testing/"
+          cp -a a21s-port/linux-postmarketos-exynos850 \
+            "$PMAPORTS/device/testing/"
+
+      - name: Configure pmbootstrap
+        env:
+          PMOS_UI: ${{ inputs.interface }}
+        run: |
+          pmbootstrap config work "$PMB_WORK"
+          pmbootstrap config aports "$PMAPORTS"
+          pmbootstrap config device samsung-a21s
+          pmbootstrap config ui "$PMOS_UI"
+          pmbootstrap config user pmos
+          pmbootstrap config hostname galaxy-a21s
+          pmbootstrap config timezone GMT
+          pmbootstrap config locale en_US.UTF-8
+          pmbootstrap config jobs "$(nproc)"
+          pmbootstrap config extra_space 512
+          pmbootstrap config build_pkgs_on_install true
+          pmbootstrap status
+
+      - name: Update local package checksums
+        run: |
+          pmbootstrap checksum linux-postmarketos-exynos850
+          pmbootstrap checksum device-samsung-a21s
+
+      - name: Build kernel
+        run: |
+          pmbootstrap build linux-postmarketos-exynos850 \
+            --arch aarch64 \
+            --force
+
+      - name: Build postmarketOS image
+        env:
+          PMOS_PASSWORD: ${{ secrets.PMOS_PASSWORD }}
+        run: |
+          if [ -z "$PMOS_PASSWORD" ]; then
+            PMOS_PASSWORD="147147"
+          fi
+
+          pmbootstrap install \
+            --password "$PMOS_PASSWORD" \
+            --filesystem ext4 \
+            --no-sparse
+
+      - name: Export rootfs and Samsung boot files
+        run: |
+          mkdir -p "$OUTPUT"
+          pmbootstrap export --odin "$OUTPUT"
+
+          cd "$OUTPUT"
+          find . -type f ! -name SHA256SUMS \
+            -exec sha256sum {} \; > SHA256SUMS
+          find . -maxdepth 2 -type f -exec ls -lh {} \;
+
+      - name: Upload postmarketOS images
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmarketOS-galaxy-a21s-${{ inputs.interface }}
+          path: output/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
+
+      - name: Upload build log after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmarketOS-build-log
+          path: pmbootstrap-work/log.txt
+          if-no-files-found: ignore
+          retention-days: 14
