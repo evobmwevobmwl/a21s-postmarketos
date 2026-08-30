@@ -133,8 +133,7 @@ jobs:
           pmbootstrap install \
             --android-recovery-zip \
             --recovery-install-partition USERDATA \
-            --password "$PMOS_PASSWORD" \
-            --filesystem ext4
+            --password "$PMOS_PASSWORD"
 
       - name: Export recovery ZIP
         run: |
