@@ -74,11 +74,19 @@ jobs:
           cp "$GITHUB_WORKSPACE/$PREBUILT_KERNEL" \
             "$PMAPORTS/device/testing/linux-postmarketos-exynos850/"
 
+          # This package is referenced by the experimental port but is not
+          # published in pmaports yet. The current mainline DTS has no
+          # touchscreen node, so it is not needed for the initial boot.
+          sed -i '/^[[:space:]]*firmware-samsung-a21s-ts-fw[[:space:]]*$/d' \
+            "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
+
           sed -i \
             's/deviceinfo_flash_method="fastboot"/deviceinfo_flash_method="heimdall-bootimg"/' \
             "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
 
           test -f "$PMAPORTS/device/testing/linux-postmarketos-exynos850/$PREBUILT_KERNEL"
+          ! grep -q 'firmware-samsung-a21s-ts-fw' \
+            "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
           grep -q 'deviceinfo_flash_method="heimdall-bootimg"' \
             "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
 
