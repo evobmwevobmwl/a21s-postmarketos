@@ -69,23 +69,20 @@ jobs:
           mkdir -p "$PMAPORTS/device/testing"
           cp -a a21s-port/device-samsung-a21s \
             "$PMAPORTS/device/testing/"
+          cp -a a21s-port/firmware-samsung-a21s \
+            "$PMAPORTS/device/testing/"
           cp -a ci/linux-prebuilt \
             "$PMAPORTS/device/testing/linux-postmarketos-exynos850"
           cp "$GITHUB_WORKSPACE/$PREBUILT_KERNEL" \
             "$PMAPORTS/device/testing/linux-postmarketos-exynos850/"
-
-          # This package is referenced by the experimental port but is not
-          # published in pmaports yet. The current mainline DTS has no
-          # touchscreen node, so it is not needed for the initial boot.
-          sed -i '/^[[:space:]]*firmware-samsung-a21s-ts-fw[[:space:]]*$/d' \
-            "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
 
           sed -i \
             's/deviceinfo_flash_method="fastboot"/deviceinfo_flash_method="heimdall-bootimg"/' \
             "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
 
           test -f "$PMAPORTS/device/testing/linux-postmarketos-exynos850/$PREBUILT_KERNEL"
-          ! grep -q 'firmware-samsung-a21s-ts-fw' \
+          test -f "$PMAPORTS/device/testing/firmware-samsung-a21s/APKBUILD"
+          grep -q 'firmware-samsung-a21s-ts-fw' \
             "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
           grep -q 'deviceinfo_flash_method="heimdall-bootimg"' \
             "$PMAPORTS/device/testing/device-samsung-a21s/deviceinfo"
@@ -128,6 +125,7 @@ jobs:
       - name: Update local package checksums
         run: |
           pmbootstrap checksum linux-postmarketos-exynos850
+          pmbootstrap checksum firmware-samsung-a21s
           pmbootstrap checksum device-samsung-a21s
 
       - name: Build TWRP recovery ZIP
@@ -140,7 +138,7 @@ jobs:
 
           pmbootstrap install \
             --android-recovery-zip \
-            --recovery-install-partition USERDATA \
+            --recovery-install-partition userdata \
             --password "$PMOS_PASSWORD"
 
       - name: Export recovery ZIP
