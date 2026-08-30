@@ -68,6 +68,12 @@ jobs:
           cp -a a21s-port/linux-postmarketos-exynos850 \
             "$PMAPORTS/device/testing/"
 
+          # The experimental aport references an unpublished touchscreen
+          # firmware package. The current DTS has no touchscreen node yet, so
+          # omit that dependency for the initial boot image.
+          sed -i '/^[[:space:]]*firmware-samsung-a21s-ts-fw[[:space:]]*$/d' \
+            "$PMAPORTS/device/testing/device-samsung-a21s/APKBUILD"
+
       - name: Configure pmbootstrap
         env:
           PMOS_UI: ${{ inputs.interface }}
@@ -113,6 +119,30 @@ jobs:
           pmbootstrap build linux-postmarketos-exynos850 \
             --arch aarch64 \
             --force
+
+      - name: Collect kernel artifacts
+        run: |
+          mkdir -p "$OUTPUT/kernel"
+
+          find "$PMB_WORK/packages" -type f \
+            -name 'linux-postmarketos-exynos850-*.apk' \
+            -exec cp {} "$OUTPUT/kernel/" \;
+
+          find "$PMB_WORK/chroot_buildroot_aarch64/home/pmos/build" -type f \
+            \( -path '*/arch/arm64/boot/Image' \
+               -o -name 'exynos850-a217f-3gb.dtb' \) \
+            -exec cp {} "$OUTPUT/kernel/" \; || true
+
+          test -n "$(find "$OUTPUT/kernel" -type f -name '*.apk' -print -quit)"
+          find "$OUTPUT/kernel" -type f -exec ls -lh {} \;
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: galaxy-a21s-mainline-kernel
+          path: output/kernel/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build postmarketOS image
         env:
