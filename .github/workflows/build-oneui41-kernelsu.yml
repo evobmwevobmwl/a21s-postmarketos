@@ -1,0 +1,263 @@
+name: Build One UI 4.1 KernelSU kernel for Galaxy A21s
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: Kernel source branch, tag, or commit
+        required: true
+        default: lineage-21
+        type: string
+      localversion:
+        description: Optional suffix; leave empty for better stock module compatibility
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oneui41-a21s-kernel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build SM-A217F stock-derived kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    env:
+      ARCH: arm64
+      PLATFORM_VERSION: '12'
+      ANDROID_MAJOR_VERSION: s
+      KERNEL_REPOSITORY: samsungexynos850/android_kernel_samsung_exynos850
+      DEFCONFIG: exynos850-a21snsxx_defconfig
+      KSU_VERSION: v0.9.5
+      KERNEL_DIR: ${{ github.workspace }}/kernel
+      OUT_DIR: ${{ github.workspace }}/kernel/out
+      DIST_DIR: ${{ github.workspace }}/dist
+      TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Check out CI files
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            curl \
+            dwarves \
+            flex \
+            git \
+            libelf-dev \
+            libssl-dev \
+            python3 \
+            rsync \
+            xz-utils \
+            zip
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: a21s-oneui41-${{ runner.os }}-${{ inputs.kernel_ref }}-${{ github.sha }}
+          restore-keys: |
+            a21s-oneui41-${{ runner.os }}-${{ inputs.kernel_ref }}-
+            a21s-oneui41-${{ runner.os }}-
+
+      - name: Download kernel source
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
+        run: |
+          git clone \
+            --depth=1 \
+            --branch "$KERNEL_REF" \
+            "https://github.com/$KERNEL_REPOSITORY.git" \
+            "$KERNEL_DIR"
+
+          git -C "$KERNEL_DIR" rev-parse HEAD
+          grep -q '^VERSION = 4$' "$KERNEL_DIR/Makefile"
+          grep -q '^PATCHLEVEL = 19$' "$KERNEL_DIR/Makefile"
+          test -f "$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG"
+
+      - name: Download Android compiler toolchains
+        run: |
+          mkdir -p "$TOOLCHAIN_DIR"
+
+          git clone \
+            --depth=1 \
+            --branch droidian \
+            https://github.com/droidian/android-platform-prebuilts-clang-host-linux-x86-33.git \
+            "$TOOLCHAIN_DIR/clang"
+
+          git clone \
+            --depth=1 \
+            --branch lineage-19.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git \
+            "$TOOLCHAIN_DIR/gcc"
+
+          "$TOOLCHAIN_DIR/clang/clang-r450784d/bin/clang" --version
+          "$TOOLCHAIN_DIR/gcc/bin/aarch64-linux-androidkernel-gcc" --version
+
+      - name: Integrate KernelSU legacy
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          git clone \
+            --depth=1 \
+            --branch "$KSU_VERSION" \
+            https://github.com/tiann/KernelSU.git \
+            KernelSU
+
+          ln -s ../KernelSU/kernel drivers/kernelsu
+          printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          test -f drivers/kernelsu/Kconfig
+          grep -q 'CONFIG_KSU' drivers/kernelsu/Makefile
+
+      - name: Configure kernel features
+        env:
+          KERNEL_LOCALVERSION: ${{ inputs.localversion }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          export PATH="$TOOLCHAIN_DIR/clang/clang-r450784d/bin:$TOOLCHAIN_DIR/gcc/bin:$PATH"
+
+          make O=out \
+            ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-androidkernel- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            "$DEFCONFIG"
+
+          scripts/config --file out/.config \
+            --enable KSU \
+            --enable KPROBES \
+            --enable KPROBE_EVENTS \
+            --enable EROFS_FS \
+            --enable EROFS_FS_XATTR \
+            --enable EROFS_FS_POSIX_ACL \
+            --enable EROFS_FS_SECURITY \
+            --enable EROFS_FS_ZIP \
+            --enable EROFS_FS_ZIP_CACHE_BIPOLAR \
+            --enable EXT4_FS \
+            --enable EXT4_FS_POSIX_ACL \
+            --enable EXT4_FS_SECURITY \
+            --enable EXT4_ENCRYPTION \
+            --enable F2FS_FS \
+            --enable F2FS_FS_XATTR \
+            --enable F2FS_FS_POSIX_ACL \
+            --enable F2FS_FS_SECURITY \
+            --enable OVERLAY_FS \
+            --enable IKCONFIG \
+            --enable IKCONFIG_PROC \
+            --disable LOCALVERSION_AUTO \
+            --set-str LOCALVERSION "$KERNEL_LOCALVERSION"
+
+          make O=out \
+            ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-androidkernel- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            olddefconfig
+
+          for option in \
+            CONFIG_KSU=y \
+            CONFIG_KPROBES=y \
+            CONFIG_EROFS_FS=y \
+            CONFIG_EROFS_FS_XATTR=y \
+            CONFIG_EROFS_FS_SECURITY=y \
+            CONFIG_EROFS_FS_ZIP=y \
+            CONFIG_EXT4_FS=y \
+            CONFIG_F2FS_FS=y \
+            CONFIG_OVERLAY_FS=y
+          do
+            grep -qx "$option" out/.config || {
+              echo "Required option was not enabled: $option"
+              exit 1
+            }
+          done
+
+      - name: Build kernel
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          export PATH="$TOOLCHAIN_DIR/clang/clang-r450784d/bin:$TOOLCHAIN_DIR/gcc/bin:$PATH"
+          export KBUILD_BUILD_USER=github-actions
+          export KBUILD_BUILD_HOST=a21s-oneui41
+          export CCACHE_BASEDIR="$KERNEL_DIR"
+          export CCACHE_COMPRESS=true
+          export CCACHE_MAXSIZE=2G
+          export CC="ccache clang"
+
+          ccache --zero-stats
+          make O=out \
+            ARCH=arm64 \
+            CC="$CC" \
+            CROSS_COMPILE=aarch64-linux-androidkernel- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            -j"$(nproc)" \
+            2>&1 | tee "$GITHUB_WORKSPACE/kernel-build.log"
+          ccache --show-stats
+
+          test -s out/arch/arm64/boot/Image
+
+      - name: Collect build artifacts
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
+          KERNEL_LOCALVERSION: ${{ inputs.localversion }}
+        working-directory: ${{ env.KERNEL_DIR }}
+        run: |
+          mkdir -p "$DIST_DIR/dtb"
+
+          cp out/arch/arm64/boot/Image "$DIST_DIR/"
+          cp out/.config "$DIST_DIR/kernel.config"
+          cp out/System.map "$DIST_DIR/"
+          cp "$GITHUB_WORKSPACE/kernel-build.log" "$DIST_DIR/"
+
+          find out/arch/arm64/boot/dts \
+            -type f \( -name '*.dtb' -o -name '*.dtbo' \) \
+            -exec cp --parents {} "$DIST_DIR/dtb/" \;
+
+          {
+            echo "device=Samsung Galaxy A21s SM-A217F"
+            echo "target_os=One UI 4.1 / Android 12"
+            echo "kernel_repository=$KERNEL_REPOSITORY"
+            echo "kernel_ref=$KERNEL_REF"
+            echo "kernel_commit=$(git rev-parse HEAD)"
+            echo "kernel_release=$(make -s O=out ARCH=arm64 kernelrelease)"
+            echo "kernelsu=$KSU_VERSION"
+            echo "localversion=$KERNEL_LOCALVERSION"
+            echo "warning=This artifact is not a flashable boot image"
+          } > "$DIST_DIR/build-info.txt"
+
+          cd "$DIST_DIR"
+          find . -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
+          find . -type f -maxdepth 8 -exec ls -lh {} \;
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: a21s-oneui41-kernelsu-${{ inputs.kernel_ref }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
+
+      - name: Upload partial log after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a21s-oneui41-kernel-failure-log
+          path: |
+            kernel-build.log
+            kernel/out/.config
+          if-no-files-found: ignore
+          retention-days: 14
